@@ -61,3 +61,46 @@ jobs:
           docker push $REGISTRY/$ECR_REPOSITORY:latest
           docker push $REGISTRY/$ECR_REPOSITORY:$IMAGE_TAG
 
+  DEPLOY:
+    needs: BUILD_AND_PUBLISH
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout source
+        uses: actions/checkout@v4
+ 
+      - name: Configure AWS credentials via OIDC
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          role-to-assume: ${{ secrets.AWS_ROLE_ARN }}
+          aws-region:     ${{ env.AWS_REGION }}
+ 
+      - name: Get full EKS cluster name
+        id: cluster
+        run: |
+          NAME=$(aws eks list-clusters --region $AWS_REGION \
+                   --query "clusters[?starts_with(@, '$EKS_CLUSTER')] | [0]" \
+                   --output text)
+          echo "name=$NAME" >> $GITHUB_OUTPUT
+ 
+      - name: Update kubeconfig
+        run: aws eks update-kubeconfig --region $AWS_REGION --name ${{ steps.cluster.outputs.name }}
+ 
+      - name: Create ECR pull secret in Kubernetes
+        run: |
+          kubectl delete secret regcred --ignore-not-found
+          kubectl create secret docker-registry regcred \
+            --docker-server=${{ secrets.REGISTRY }} \
+            --docker-username=AWS \
+            --docker-password=$(aws ecr get-login-password --region $AWS_REGION)
+ 
+      - name: Deploy with Helm
+        uses: bitovi/github-actions-deploy-eks-helm@v1.2.10
+        with:
+          aws-region: ${{ env.AWS_REGION }}
+          cluster-name: ${{ steps.cluster.outputs.name }}
+          chart-path: helm/vprofilecharts
+          namespace: default
+          name: vprofile-stack
+          values: appimage=${{ secrets.REGISTRY }}/${{ env.ECR_REPOSITORY }},apptag=${{ github.run_number }}
+
+
