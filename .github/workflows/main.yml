@@ -4,7 +4,7 @@ on:
   workflow_dispatch:           # manual trigger
   push:
     branches:
-      - main
+      - mine
  
 permissions:
   id-token: write   # for OIDC
@@ -33,7 +33,7 @@ jobs:
  
       - name: Maven checkstyle
         run: mvn -B checkstyle:checkstyle
-        
+
   BUILD_AND_PUBLISH:
     needs: Testing
     runs-on: ubuntu-latest
