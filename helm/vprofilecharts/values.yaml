@@ -1,0 +1,5 @@
+# Default values for vprofilecharts.
+# These are placeholders — the workflow overrides them with --set at deploy time.
+
+appimage: REPLACE_AT_DEPLOY_TIME
+apptag: latest

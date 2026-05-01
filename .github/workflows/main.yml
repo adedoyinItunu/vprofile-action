@@ -1,0 +1,146 @@
+# =============================================================================
+# .github/workflows/main.yml
+#
+# Application pipeline for the vprofile-action repo.
+#   Testing       — Maven test + checkstyle
+#   BUILD_AND_PUBLISH — build Docker image, push to ECR
+#   DeployToEKS   — pull image tag, deploy via Helm to the EKS cluster
+# =============================================================================
+
+name: "vprofile Application"
+
+on:
+  workflow_dispatch:        # manual trigger from the Actions tab
+  push:
+    branches:
+      - main
+
+permissions:
+  id-token: write   # OIDC token request
+  contents: read    # actions/checkout
+
+env:
+  AWS_REGION:     ${{ secrets.AWS_REGION }}
+  ECR_REPOSITORY: vprofileapp
+  EKS_CLUSTER:    vprofile-eks         # this is the BASE name — actual cluster has random suffix
+
+jobs:
+
+  # ---------------------------------------------------------------------------
+  Testing:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout source
+        uses: actions/checkout@v4
+
+      - name: Set up Java 11
+        uses: actions/setup-java@v4
+        with:
+          distribution: "temurin"
+          java-version: "11"
+
+      - name: Maven test
+        run: mvn -B test
+
+      - name: Maven checkstyle
+        run: mvn -B checkstyle:checkstyle
+
+  # ---------------------------------------------------------------------------
+  BUILD_AND_PUBLISH:
+    needs: Testing                      # only run if tests passed
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout source
+        uses: actions/checkout@v4
+
+      - name: Configure AWS credentials via OIDC
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          role-to-assume: ${{ secrets.AWS_ROLE_ARN }}
+          aws-region:     ${{ env.AWS_REGION }}
+
+      - name: Login to Amazon ECR
+        id: login-ecr
+        uses: aws-actions/amazon-ecr-login@v2
+
+      - name: Build, tag, and push image to ECR
+        id: build-image
+        env:
+          ECR_REGISTRY: ${{ steps.login-ecr.outputs.registry }}
+          IMAGE_TAG:    ${{ github.run_number }}    # use the workflow run # as the tag
+        run: |
+          docker build -t $ECR_REGISTRY/$ECR_REPOSITORY:$IMAGE_TAG .
+          docker push   $ECR_REGISTRY/$ECR_REPOSITORY:$IMAGE_TAG
+          echo "image_tag=$IMAGE_TAG" >> $GITHUB_OUTPUT
+
+  # ---------------------------------------------------------------------------
+  DeployToEKS:
+    needs: BUILD_AND_PUBLISH
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout source
+        uses: actions/checkout@v4
+
+      - name: Configure AWS credentials via OIDC
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          role-to-assume: ${{ secrets.AWS_ROLE_ARN }}
+          aws-region:     ${{ env.AWS_REGION }}
+
+      # Find the actual cluster name (it has a random suffix from Terraform).
+      # We list clusters in the region and grab the one starting with EKS_CLUSTER.
+      - name: Find actual cluster name
+        id: cluster
+        run: |
+          CLUSTER_NAME=$(aws eks list-clusters --region ${{ env.AWS_REGION }} --query "clusters[?starts_with(@, '${{ env.EKS_CLUSTER }}')]" --output text | head -n1)
+          echo "cluster_name=$CLUSTER_NAME" >> $GITHUB_OUTPUT
+          echo "Found cluster: $CLUSTER_NAME"
+
+      - name: Update kubeconfig for kubectl
+        run: |
+          aws eks update-kubeconfig \
+            --name ${{ steps.cluster.outputs.cluster_name }} \
+            --region ${{ env.AWS_REGION }}
+
+      # Install the NGINX Ingress Controller. Idempotent — works whether or
+      # not it's already installed (apply == create-or-update).
+      - name: Install NGINX Ingress Controller
+        run: |
+          kubectl apply -f https://raw.githubusercontent.com/kubernetes/ingress-nginx/controller-v1.10.1/deploy/static/provider/aws/deploy.yaml
+          # Wait until the ingress-nginx pods are ready
+          kubectl wait --namespace ingress-nginx \
+            --for=condition=ready pod \
+            --selector=app.kubernetes.io/component=controller \
+            --timeout=180s || true
+
+      # Create the regcred secret so K8s can pull images from ECR.
+      # Recreated every run so the auth token is fresh (ECR tokens expire in 12h).
+      - name: Create ECR pull secret
+        run: |
+          kubectl delete secret regcred --ignore-not-found
+          kubectl create secret docker-registry regcred \
+            --docker-server=${{ secrets.REGISTRY }} \
+            --docker-username=AWS \
+            --docker-password=$(aws ecr get-login-password --region ${{ env.AWS_REGION }})
+
+      - name: Setup Helm
+        uses: azure/setup-helm@v4
+        with:
+          version: "v3.13.0"
+
+      # Deploy. --install means "install if not present, upgrade if it is" —
+      # safe to run on every commit.
+      - name: Deploy via Helm
+        run: |
+          helm upgrade --install vproapp-stack ./helm/vprofilecharts \
+            --set appimage=${{ secrets.REGISTRY }}/${{ env.ECR_REPOSITORY }} \
+            --set apptag=${{ github.run_number }}
+
+      # Print useful info to the workflow log
+      - name: Show deployment status
+        run: |
+          kubectl get all
+          echo ""
+          echo "Wait ~2 minutes for the LoadBalancer to provision, then run:"
+          echo "  kubectl get svc -n ingress-nginx"
+          echo "to find the EXTERNAL-IP for the app."

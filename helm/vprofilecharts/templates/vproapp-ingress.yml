@@ -1,0 +1,26 @@
+# =============================================================================
+# kubernetes/vproapp-ingress.yml — public entrypoint for the web tier.
+# Routes ALL traffic (any hostname, any path) to the vproapp-service.
+# The NGINX Ingress Controller turns this rule into actual NGINX config.
+# =============================================================================
+
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+  name: vproapp-ingress
+  annotations:
+    nginx.ingress.kubernetes.io/rewrite-target: /
+spec:
+  ingressClassName: nginx       # use the NGINX Ingress Controller
+  rules:
+    - http:
+        paths:
+          - path: /
+            pathType: Prefix
+            backend:
+              service:
+                name: vproapp-service
+                port:
+                  number: 8080
+# No host: field — accept any incoming hostname.
+# This is what lets us reach the app via the LB's auto-assigned AWS hostname.

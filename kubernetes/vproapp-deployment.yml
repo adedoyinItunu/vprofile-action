@@ -1,0 +1,32 @@
+# =============================================================================
+# kubernetes/vproapp-deployment.yml — the Deployment for the vprofile web tier.
+# Helm template: {{ .Values.* }} placeholders get substituted at deploy time.
+# =============================================================================
+
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: vproapp
+  labels:
+    app: vproapp
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: vproapp        # this Deployment manages pods labelled app=vproapp
+  template:
+    metadata:
+      labels:
+        app: vproapp      # ... and these are the labels stamped on those pods
+    spec:
+      # The deploy workflow creates this secret with the ECR pull credentials.
+      # Without it, K8s tries to pull from ECR with no auth and fails.
+      imagePullSecrets:
+        - name: regcred
+      containers:
+        - name: vproapp
+          # Helm fills these in at deploy time:
+          # appimage = ECR repo URL, apptag = git commit SHA / build number
+          image: "{{ .Values.appimage }}:{{ .Values.apptag }}"
+          ports:
+            - containerPort: 8080

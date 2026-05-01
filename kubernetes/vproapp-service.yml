@@ -1,0 +1,18 @@
+# =============================================================================
+# kubernetes/vproapp-service.yml — internal Service for the web tier.
+# ClusterIP means it's only reachable inside the cluster — the Ingress will
+# expose it externally.
+# =============================================================================
+
+apiVersion: v1
+kind: Service
+metadata:
+  name: vproapp-service
+spec:
+  type: ClusterIP
+  selector:
+    app: vproapp        # forwards to any pod with this label (the Deployment's)
+  ports:
+    - port: 8080        # the port the Service listens on
+      targetPort: 8080  # the port on the pod where Tomcat is listening
+      protocol: TCP
