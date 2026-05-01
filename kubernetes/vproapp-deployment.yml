@@ -1,6 +1,6 @@
 # =============================================================================
 # kubernetes/vproapp-deployment.yml — the Deployment for the vprofile web tier.
-# Helm template: {{ .Values.* }} placeholders get substituted at deploy time.
+# Helm template: Values placeholders get substituted at deploy time.
 # =============================================================================
 
 apiVersion: apps/v1
